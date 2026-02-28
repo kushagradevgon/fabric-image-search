@@ -26,8 +26,8 @@ export class ImageSeedService {
       LEFT JOIN files f ON f.id = frm.file_id
       WHERE frm.field = 'image'
         AND frm.related_type IN ('api::fabric.fabric')
-      ORDER BY frm.related_id ASC
-      LIMIT 20;
+      ORDER BY random()
+      LIMIT 500;
     `;
 
     this.logger.log('Fetching fabric image records from DB...');

@@ -24,15 +24,31 @@ export class ImageMetadata {
   @Column({ type: 'jsonb', nullable: true })
   provider_metadata: {
     pattern?: string;
+    pattern_detail?: string;
     weave?: string;
-    colors?: string[];
+    weave_detail?: string;
+    stripe_width?: string;
     fabricType?: string;
+    fabric_coverage?: number;
+    colors?: string[];
+    dominantColor?: string;
+    baseColor?: string;
+    accentColor?: string;
+    palette?: string[];
+    distribution?: Record<string, number>;
     confidence?: number;
     hash?: string;
+    indexStatus?: 'indexed' | 'rejected_not_fabric';
   } | null;
 
   @Column('vector', { length: 768, nullable: true })
   embedding: number[] | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  dominant_colors_rgb: { r: number; g: number; b: number }[] | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  dominant_colors_lab: { l: number; a: number; b: number }[] | null;
 
   @Index()
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })

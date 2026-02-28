@@ -11,58 +11,46 @@ export class GeminiEmbeddingService {
   private readonly apiKey = process.env.GEMINI_API_KEY;
 
   /**
-   * Build searchable text from classification (pattern + weave + colors + fabricType).
-   * Used for both indexing and query embedding; never color-only.
+   * Build searchable text from classification (full image) and pixel-based colors.
    */
-  buildTextFromClassification(classification: {
-    pattern: string;
-    weave: string;
-    colors: string[];
-    fabricType: string;
-  }): string {
+  buildTextFromClassification(
+    classification: {
+      patternPrimary: string;
+      patternDetail?: string;
+      weavePrimary: string;
+      weaveDetail?: string;
+      stripeWidth: string;
+      fabricType: string;
+    },
+    dominantColor: string,
+  ): string {
+    const color = dominantColor?.trim() || 'neutral';
     const parts = [
-      classification.pattern && classification.pattern !== 'unknown'
-        ? `pattern ${classification.pattern}`
-        : '',
-      classification.weave && classification.weave !== 'unknown'
-        ? `weave ${classification.weave}`
-        : '',
-      classification.fabricType && classification.fabricType !== 'unknown'
-        ? `fabric ${classification.fabricType}`
-        : '',
-      (classification.colors?.length ?? 0) > 0
-        ? `colors ${classification.colors.join(' ')}`
-        : '',
+      classification.patternPrimary,
+      classification.patternDetail,
+      classification.weavePrimary,
+      classification.weaveDetail,
+      classification.fabricType,
+      'fabric',
+      classification.stripeWidth !== 'none' ? classification.stripeWidth : '',
+      'in',
+      color,
     ].filter(Boolean);
-    return parts.join('. ') || 'fabric textile';
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
   }
 
   async embed(text: string): Promise<number[]> {
-    if (!this.apiKey) {
-      throw new Error('GEMINI_API_KEY is not set');
-    }
-
-    const response = await axios.post<{
-      embedding?: { values?: number[] };
-    }>(
+    if (!this.apiKey) throw new Error('GEMINI_API_KEY is not set');
+    const response = await axios.post<{ embedding?: { values?: number[] } }>(
       `${EMBED_URL}?key=${this.apiKey}`,
-      {
-        content: {
-          parts: [{ text }],
-        },
-        outputDimensionality: EMBED_DIM,
-      },
+      { content: { parts: [{ text }] }, outputDimensionality: EMBED_DIM },
       { timeout: 15_000 },
     );
-
     const values = response.data?.embedding?.values;
     if (!Array.isArray(values) || values.length !== EMBED_DIM) {
-      this.logger.error(
-        `Unexpected embedding shape: length=${values?.length ?? 0}, expected ${EMBED_DIM}`,
-      );
+      this.logger.error(`Unexpected embedding shape: length=${values?.length ?? 0}, expected ${EMBED_DIM}`);
       throw new Error('Invalid embedding response');
     }
-
     return this.normalizeL2(values);
   }
 

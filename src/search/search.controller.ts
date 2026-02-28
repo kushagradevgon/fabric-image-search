@@ -1,6 +1,6 @@
 import {
-  BadRequestException,
   Controller,
+  Logger,
   Post,
   UploadedFile,
   UseInterceptors,
@@ -10,9 +10,9 @@ import { Throttle } from '@nestjs/throttler';
 import { ImageMetadataService } from '../image-metadata/image-metadata.service';
 import { GeminiVisionService } from '../vision/gemini-vision.service';
 import { GeminiEmbeddingService } from '../vision/gemini-embedding.service';
+import { ColorExtractionService } from '../modules/vision/color-extraction.service';
 import { EmbeddingCacheService } from '../cache/embedding-cache.service';
-
-const MIN_CONFIDENCE = 0.65;
+import { rgbToLab } from '../utils/color-lab.util';
 
 interface UploadedImageFile {
   buffer?: Buffer;
@@ -20,10 +20,13 @@ interface UploadedImageFile {
 
 @Controller('search')
 export class SearchController {
+  private readonly logger = new Logger(SearchController.name);
+
   constructor(
     private readonly imageMetadataService: ImageMetadataService,
     private readonly geminiVisionService: GeminiVisionService,
     private readonly geminiEmbeddingService: GeminiEmbeddingService,
+    private readonly colorExtractionService: ColorExtractionService,
     private readonly embeddingCache: EmbeddingCacheService,
   ) {}
 
@@ -31,52 +34,99 @@ export class SearchController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('image'))
   async searchByImage(@UploadedFile() file: UploadedImageFile) {
+    const totalStart = performance.now();
+
     if (!file?.buffer) {
-      throw new BadRequestException('No image file uploaded');
+      this.logger.warn('Search: no image file uploaded');
+      return this.invalidResponse(totalStart);
     }
-    const buffer = Buffer.isBuffer(file.buffer)
-      ? file.buffer
-      : Buffer.from(file.buffer);
+    const buffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer);
 
-    const classification =
-      await this.geminiVisionService.classifyFabric(buffer);
+    try {
+      const classification = await this.geminiVisionService.classifyFabric(buffer);
+      if (!classification.isFabricVisible) {
+        this.logger.warn('Search: isFabricVisible=false');
+        return this.invalidResponse(totalStart);
+      }
 
-    if (classification.confidence < MIN_CONFIDENCE) {
-      throw new BadRequestException('Low confidence image');
+      const queryHash = this.geminiVisionService.generateHash(buffer);
+      const colorResult = await this.colorExtractionService.extract(buffer);
+      let embedding = await this.embeddingCache.get(queryHash);
+      if (!embedding) {
+        const text = this.geminiEmbeddingService.buildTextFromClassification(
+          classification,
+          colorResult.dominantColor,
+        );
+        embedding = await this.geminiEmbeddingService.embed(text);
+        await this.embeddingCache.set(queryHash, embedding);
+      }
+      if (!embedding?.length) {
+        return this.invalidResponse(totalStart);
+      }
+
+      const patternPrimary = (classification.patternPrimary ?? '').trim().toLowerCase();
+      const stripeWidth = (classification.stripeWidth ?? 'none').trim().toLowerCase();
+      const dominantColorsRGB = colorResult.dominantColorsRGB ?? [];
+      const queryLabColors = dominantColorsRGB.map((c) => rgbToLab(c.r, c.g, c.b));
+      const colors = (colorResult.dominantColors
+        ? [...colorResult.dominantColors]
+        : [colorResult.dominantColor, colorResult.baseColor, colorResult.accentColor].filter(Boolean) as string[]
+      ).map((c) => (c ?? '').trim().toLowerCase());
+
+      const results = await this.imageMetadataService.strictFilterSearch(
+        patternPrimary,
+        stripeWidth,
+        queryLabColors,
+        embedding,
+        queryHash,
+      );
+
+      if (results.length === 0) {
+        const totalDuration = performance.now() - totalStart;
+        this.logger.log(`Total search request took ${totalDuration.toFixed(2)} ms`);
+        return { valid: true, query: null, matchScore: null, results: [] };
+      }
+
+      const totalDuration = performance.now() - totalStart;
+      this.logger.log(`Total search request took ${totalDuration.toFixed(2)} ms`);
+
+      return {
+        valid: true,
+        query: {
+          patternPrimary,
+          patternDetail: classification.patternDetail,
+          weavePrimary: classification.weavePrimary,
+          weaveDetail: classification.weaveDetail,
+          fabricType: classification.fabricType,
+          colors,
+        },
+        matchScore: results[0]?.finalScore ?? results[0]?.similarity ?? null,
+        results: results.map((r) => ({
+          fabricId: r.entityId,
+          imageUrl: r.imageUrl,
+          score: r.finalScore ?? r.similarity,
+          patternPrimary: r.pattern,
+          patternDetail: r.pattern_detail,
+          weavePrimary: r.weave,
+          weaveDetail: r.weave_detail,
+          fabricType: r.fabricType,
+          colors: r.colors,
+        })),
+      };
+    } catch (err) {
+      this.logger.warn(`Search failed: ${err instanceof Error ? err.message : String(err)}`);
+      return this.invalidResponse(totalStart);
     }
+  }
 
-    const imageHash = this.geminiVisionService.generateHash(buffer);
-    let embedding = await this.embeddingCache.get(imageHash);
-    if (!embedding) {
-      const text =
-        this.geminiEmbeddingService.buildTextFromClassification(classification);
-      embedding = await this.geminiEmbeddingService.embed(text);
-      await this.embeddingCache.set(imageHash, embedding);
-    }
-
-    const results = await this.imageMetadataService.vectorSearch(
-      embedding,
-      classification.pattern,
-      classification.weave,
-    );
-
+  private invalidResponse(totalStart: number) {
+    const totalDuration = performance.now() - totalStart;
+    this.logger.log(`Total search request took ${totalDuration.toFixed(2)} ms`);
     return {
-      query: {
-        pattern: classification.pattern,
-        weave: classification.weave,
-        fabricType: classification.fabricType,
-        colors: classification.colors,
-      },
-      matchScore: results[0]?.similarity ?? null,
-      results: results.map((r) => ({
-        fabricId: r.entityId,
-        imageUrl: r.imageUrl,
-        score: r.similarity,
-        pattern: r.pattern,
-        weave: r.weave,
-        fabricType: r.fabricType,
-        colors: r.colors,
-      })),
+      valid: false,
+      query: null,
+      matchScore: null,
+      results: [],
     };
   }
 }

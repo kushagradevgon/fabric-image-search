@@ -1,32 +1,81 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
-import sharp from 'sharp';
 import crypto from 'crypto';
+import {
+  PATTERN_PRIMARY_ENUM,
+  WEAVE_PRIMARY_ENUM,
+  STRIPE_WIDTH_ENUM,
+  FABRIC_TYPE_ENUM,
+  isPatternPrimary,
+  isWeavePrimary,
+  isStripeWidth,
+  isFabricType,
+  mapToPatternPrimary,
+  mapToWeavePrimary,
+} from '../constants/fabric-visual.enums';
+import { ImagePreprocessingService } from './image-preprocessing.service';
+
+const GEMINI_VISION_MODEL = 'gemini-2.5-flash';
+
+export const FABRIC_COVERAGE_SKIP = 0.15;
+export const FABRIC_COVERAGE_LOW = 0.4;
 
 export interface FabricClassification {
-  pattern: string;
-  weave: string;
-  colors: string[];
+  patternPrimary: string;
+  patternDetail: string;
+  weavePrimary: string;
+  weaveDetail: string;
+  stripeWidth: string;
   fabricType: string;
+  isFabricVisible: boolean;
+  fabricCoverage: number;
   confidence: number;
 }
 
-const CROP_POSITIONS = [
-  { name: 'center', left: 0.25, top: 0.25 },
-  { name: 'top-left', left: 0, top: 0 },
-  { name: 'bottom-right', left: 0.5, top: 0.5 },
-] as const;
+interface GeminiClassificationResponse {
+  patternPrimary?: string;
+  patternDetail?: string;
+  weavePrimary?: string;
+  weaveDetail?: string;
+  stripeWidth?: string;
+  fabricType?: string;
+  isFabricVisible?: boolean;
+  fabricCoverage?: number;
+  confidence?: number;
+}
 
-const STRICT_JSON_SCHEMA = `
+const SYSTEM = `You are a textile classification AI. Use the controlled primary lists for patternPrimary, weavePrimary, stripeWidth, fabricType. For any pattern not exactly in the list, map to the CLOSEST primary and put the specific name in patternDetail (e.g. "windowpane check" → patternPrimary "checked", patternDetail "windowpane check"). Never return "unknown". Return strict JSON only.`;
+
+function buildClassificationPrompt(): string {
+  return `Allowed patternPrimary (pick closest): ${PATTERN_PRIMARY_ENUM.join(', ')}
+Allowed weavePrimary (pick closest): ${WEAVE_PRIMARY_ENUM.join(', ')}
+Allowed stripeWidth: ${STRIPE_WIDTH_ENUM.join(', ')}
+Allowed fabricType: ${FABRIC_TYPE_ENUM.join(', ')}
+
+From this image extract:
+- patternPrimary: one from the list (closest match)
+- patternDetail: free text describing the exact pattern if not exactly in list (e.g. "windowpane check", "pin stripe")
+- weavePrimary: one from the list (closest match)
+- weaveDetail: free text for weave detail if needed
+- stripeWidth: "none" | "thin" | "medium" | "broad" (only if stripes visible)
+- fabricType: one from the list
+- isFabricVisible: true if fabric/textile is visible in the image
+- fabricCoverage: 0-1 estimated fraction of image that shows fabric (0=none, 1=full frame fabric)
+- confidence: 0-1
+
+Return JSON only (no colors):
 {
-  "pattern": string (one of: "plain","striped","checked","plaid","floral","geometric","abstract","herringbone","paisley","solid","printed","polka dot","unknown"),
-  "weave": string (one of: "twill","plain weave","satin","knit","jacquard","denim","chiffon","linen weave","canvas","rib knit","unknown"),
-  "colors": string[] (dominant colors, lowercase),
-  "fabricType": string (e.g. "cotton","silk","linen","polyester","wool","blend","unknown"),
-  "confidence": number (0-1)
+  "patternPrimary": string,
+  "patternDetail": string,
+  "weavePrimary": string,
+  "weaveDetail": string,
+  "stripeWidth": string,
+  "fabricType": string,
+  "isFabricVisible": boolean,
+  "fabricCoverage": number,
+  "confidence": number
 }`;
-
-const GEMINI_VISION_MODEL = 'gemini-2.5-flash';
+}
 
 @Injectable()
 export class GeminiVisionService {
@@ -36,172 +85,92 @@ export class GeminiVisionService {
     return `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent`;
   }
 
+  constructor(private readonly preprocessing: ImagePreprocessingService) {}
+
   generateHash(buffer: Buffer): string {
     return crypto.createHash('sha256').update(buffer).digest('hex');
   }
 
-  async preprocessCrops(buffer: Buffer): Promise<Buffer[]> {
-    const resized = await sharp(buffer)
-      .resize(512, 512, { fit: 'cover' })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-
-    const metadata = await sharp(resized).metadata();
-    const w = metadata.width ?? 512;
-    const h = metadata.height ?? 512;
-    const cropSize = Math.min(w, h, 512);
-    const crops: Buffer[] = [];
-
-    for (const pos of CROP_POSITIONS) {
-      const left = Math.floor((w - cropSize) * pos.left);
-      const top = Math.floor((h - cropSize) * pos.top);
-      const crop = await sharp(resized)
-        .extract({
-          left: Math.max(0, left),
-          top: Math.max(0, top),
-          width: Math.min(cropSize, w - Math.max(0, left)),
-          height: Math.min(cropSize, h - Math.max(0, top)),
-        })
-        .resize(512, 512, { fit: 'cover' })
-        .jpeg({ quality: 85 })
-        .toBuffer();
-      crops.push(crop);
+  private async callGemini(imageBuffer: Buffer, userPrompt: string): Promise<string> {
+    if (!this.apiKey?.trim()) throw new Error('GEMINI_API_KEY is not set');
+    const base64 = imageBuffer.toString('base64');
+    const response = await axios.post(
+      `${this.baseUrl}?key=${this.apiKey}`,
+      {
+        contents: [{ role: 'user', parts: [{ text: userPrompt }, { inline_data: { mime_type: 'image/jpeg', data: base64 } }] }],
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        generationConfig: { responseMimeType: 'application/json' },
+      },
+      { timeout: 30_000, validateStatus: (s) => s === 200 },
+    );
+    if (response.status !== 200) {
+      const msg = response.data?.error?.message ?? response.data?.message ?? JSON.stringify(response.data ?? response.statusText);
+      this.logger.warn(`Gemini API error: ${msg}`);
+      throw new Error(`Gemini API error: ${msg}`);
     }
-
-    return crops;
+    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+    if (!text) throw new Error('Empty response from Gemini');
+    return text;
   }
 
+  private parseJson<T>(text: string, label: string): T {
+    const cleaned = text.replace(/^```json\s*|\s*```$/g, '').trim();
+    try {
+      return JSON.parse(cleaned) as T;
+    } catch (e) {
+      this.logger.warn(`Invalid JSON (${label}): ${cleaned.slice(0, 200)}`);
+      throw new Error(`Invalid JSON in ${label} response`);
+    }
+  }
+
+  /**
+   * Classify from FULL image only. Returns patternPrimary, patternDetail, weavePrimary, weaveDetail,
+   * stripeWidth, fabricType, isFabricVisible, fabricCoverage, confidence.
+   * Colors are NOT from Gemini – use pixel extraction.
+   * Do NOT reject on small blur; only skip if isFabricVisible = false.
+   */
   async classifyFabric(buffer: Buffer): Promise<FabricClassification> {
-    const crops = await this.preprocessCrops(buffer);
-    const results: Array<FabricClassification & { raw?: string }> = [];
+    const { full } = await this.preprocessing.prepare(buffer);
+    const raw = await this.callGemini(full, buildClassificationPrompt());
+    const parsed = this.parseJson<GeminiClassificationResponse>(raw, 'classification');
 
-    const prompt = `You are a textile classification AI. Return STRICT JSON only, no markdown, no explanation.
-Schema: ${STRICT_JSON_SCHEMA}
-Output a single JSON object matching the schema above.`;
+    const isFabricVisible = Boolean(parsed.isFabricVisible !== false);
+    const fabricCoverage = Math.max(0, Math.min(1, Number(parsed.fabricCoverage) ?? 0));
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence) ?? 0));
 
-    for (let i = 0; i < crops.length; i++) {
-      const base64 = crops[i].toString('base64');
-      try {
-        if (!this.apiKey?.trim()) {
-          throw new Error('GEMINI_API_KEY is not set');
-        }
-        const response = await axios.post(
-          `${this.baseUrl}?key=${this.apiKey}`,
-          {
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  {
-                    inline_data: {
-                      mime_type: 'image/jpeg',
-                      data: base64,
-                    },
-                  },
-                ],
-              },
-            ],
-            generationConfig: {
-              responseMimeType: 'application/json',
-            },
-          },
-          { timeout: 30_000, validateStatus: () => true },
-        );
+    const patternPrimaryRaw = String(parsed.patternPrimary ?? 'solid').toLowerCase().trim();
+    const patternPrimary = isPatternPrimary(patternPrimaryRaw) ? patternPrimaryRaw : mapToPatternPrimary(patternPrimaryRaw);
+    const patternDetail = String(parsed.patternDetail ?? '').trim().slice(0, 200) || patternPrimaryRaw;
 
-        if (response.status === 403) {
-          const msg =
-            response.data?.error?.message ??
-            response.data?.message ??
-            JSON.stringify(response.data ?? response.statusText);
-          this.logger.warn(
-            `Gemini 403 (crop ${i + 1}): ${msg}. Check GEMINI_API_KEY and model "${GEMINI_VISION_MODEL}".`,
-          );
-          continue;
-        }
-        if (response.status !== 200) {
-          this.logger.warn(
-            `Gemini ${response.status} (crop ${i + 1}): ${JSON.stringify(response.data?.error ?? response.data ?? response.statusText)}`,
-          );
-          continue;
-        }
+    const weavePrimaryRaw = String(parsed.weavePrimary ?? 'plain weave').toLowerCase().trim();
+    const weavePrimary = isWeavePrimary(weavePrimaryRaw) ? weavePrimaryRaw : mapToWeavePrimary(weavePrimaryRaw);
+    const weaveDetail = String(parsed.weaveDetail ?? '').trim().slice(0, 200);
 
-        const text =
-          response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
-        if (!text) continue;
-        const cleaned = text.replace(/^```json\s*|\s*```$/g, '').trim();
-        const parsed = JSON.parse(cleaned) as FabricClassification;
-        if (
-          typeof parsed.pattern === 'string' &&
-          typeof parsed.weave === 'string' &&
-          typeof parsed.confidence === 'number'
-        ) {
-          results.push({
-            pattern: String(parsed.pattern).toLowerCase(),
-            weave: String(parsed.weave).toLowerCase(),
-            colors: Array.isArray(parsed.colors)
-              ? parsed.colors.map((c) => String(c).toLowerCase())
-              : [],
-            fabricType: typeof parsed.fabricType === 'string' ? parsed.fabricType.toLowerCase() : 'unknown',
-            confidence: Math.max(0, Math.min(1, Number(parsed.confidence))),
-          });
-        }
-      } catch (err) {
-        this.logger.warn(
-          `Crop ${i + 1}/${crops.length} classification failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+    const stripeWidthRaw = String(parsed.stripeWidth ?? 'none').toLowerCase().trim();
+    const stripeWidth = isStripeWidth(stripeWidthRaw) ? stripeWidthRaw : 'none';
 
-    if (results.length === 0) {
-      this.logger.warn('No valid classification from any crop');
-      return {
-        pattern: 'unknown',
-        weave: 'unknown',
-        colors: [],
-        fabricType: 'unknown',
-        confidence: 0,
-      };
-    }
+    const fabricTypeRaw = String(parsed.fabricType ?? 'blend').toLowerCase().trim();
+    const fabricType = isFabricType(fabricTypeRaw) ? fabricTypeRaw : 'blend';
 
-    return this.majorityVote(results);
-  }
-
-  private majorityVote(
-    results: Array<{ pattern: string; weave: string; colors: string[]; fabricType: string; confidence: number }>,
-  ): FabricClassification {
-    const patternVotes: Record<string, number> = {};
-    const weaveVotes: Record<string, number> = {};
-    const fabricTypeVotes: Record<string, number> = {};
-    const colorCounts: Record<string, number> = {};
-    let totalConfidence = 0;
-
-    for (const r of results) {
-      patternVotes[r.pattern] = (patternVotes[r.pattern] ?? 0) + 1;
-      weaveVotes[r.weave] = (weaveVotes[r.weave] ?? 0) + 1;
-      fabricTypeVotes[r.fabricType] = (fabricTypeVotes[r.fabricType] ?? 0) + 1;
-      for (const c of r.colors ?? []) {
-        colorCounts[c] = (colorCounts[c] ?? 0) + 1;
-      }
-      totalConfidence += r.confidence;
-    }
-
-    const pattern =
-      Object.entries(patternVotes).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown';
-    const weave =
-      Object.entries(weaveVotes).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown';
-    const fabricType =
-      Object.entries(fabricTypeVotes).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown';
-    const colors = Object.entries(colorCounts)
-      .filter(([, count]) => count >= 2)
-      .map(([c]) => c);
-    const confidence = totalConfidence / results.length;
+    this.logger.debug(
+      `Classification: patternPrimary=${patternPrimary} patternDetail=${patternDetail} weavePrimary=${weavePrimary} isFabricVisible=${isFabricVisible} fabricCoverage=${fabricCoverage} confidence=${confidence}`,
+    );
 
     return {
-      pattern,
-      weave,
-      colors,
+      patternPrimary,
+      patternDetail,
+      weavePrimary,
+      weaveDetail,
+      stripeWidth,
       fabricType,
+      isFabricVisible,
+      fabricCoverage,
       confidence,
     };
+  }
+
+  async prepareFullForEmbedding(buffer: Buffer): Promise<Buffer> {
+    const { full } = await this.preprocessing.prepare(buffer);
+    return full;
   }
 }
