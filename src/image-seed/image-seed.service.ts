@@ -27,7 +27,7 @@ export class ImageSeedService {
       WHERE frm.field = 'image'
         AND frm.related_type IN ('api::fabric.fabric')
       ORDER BY random()
-      LIMIT 500;
+      LIMIT 1000;
     `;
 
     this.logger.log('Fetching fabric image records from DB...');
