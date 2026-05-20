@@ -17,15 +17,43 @@ export class ImageSeedService {
 
   async seed() {
     const query = `
-      SELECT 
+      SELECT
           frm.related_type,
-          frm.related_id AS entity_id,
           f.url AS file_url,
-          f.formats
+          f.formats,
+          frm.related_id AS entity_id,
+          sc.id AS subcategory_id,
+          sc.name AS subcategory,
+          cat.id AS category_id,
+          cat.name AS category
       FROM files_related_morphs frm
-      LEFT JOIN files f ON f.id = frm.file_id
+      LEFT JOIN files f
+          ON f.id = frm.file_id
+
+      -- Fabrics
+      LEFT JOIN fabrics fab
+          ON frm.related_type = 'api::fabric.fabric' AND frm.related_id = fab.id
+      LEFT JOIN fabrics_sub_category_links fsl
+          ON fab.id = fsl.fabric_id
+      LEFT JOIN fabrics_category_links fcl
+          ON fab.id = fcl.fabric_id
+
+      -- Knits
+      LEFT JOIN knites knit
+          ON frm.related_type = 'api::knit.knit' AND frm.related_id = knit.id
+      LEFT JOIN knites_sub_category_links ksl
+          ON knit.id = ksl.knit_id
+      LEFT JOIN knites_category_links kcl
+          ON knit.id = kcl.knit_id
+
+      -- Common category/subcategory tables
+      LEFT JOIN sub_categories sc
+          ON sc.id = COALESCE(fsl.sub_category_id, ksl.sub_category_id)
+      LEFT JOIN categories cat
+          ON cat.id = COALESCE(fcl.category_id, kcl.category_id)
+
       WHERE frm.field = 'image'
-        AND frm.related_type IN ('api::fabric.fabric')
+        AND frm.related_type IN ('api::fabric.fabric', 'api::knit.knit')
       ORDER BY random()
       LIMIT 1000;
     `;
@@ -52,9 +80,13 @@ export class ImageSeedService {
       }
 
       const entityId = String(record.entity_id);
+      const categoryId = record.category_id != null ? String(record.category_id) : undefined;
+      const subcategoryId = record.subcategory_id != null ? String(record.subcategory_id) : undefined;
       const payload: SeedJobPayload = {
         entityId,
         imageUrl: candidate,
+        categoryId,
+        subcategoryId,
         index: i + 1,
         total,
       };

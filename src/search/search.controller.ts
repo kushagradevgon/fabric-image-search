@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Logger,
   Post,
@@ -33,7 +34,11 @@ export class SearchController {
   @Post('image')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('image'))
-  async searchByImage(@UploadedFile() file: UploadedImageFile) {
+  async searchByImage(
+    @UploadedFile() file: UploadedImageFile,
+    @Body('categoryId') categoryId?: string,
+    @Body('subcategoryId') subcategoryId?: string,
+  ) {
     const totalStart = performance.now();
 
     if (!file?.buffer) {
@@ -79,6 +84,8 @@ export class SearchController {
         queryLabColors,
         embedding,
         queryHash,
+        categoryId,
+        subcategoryId,
       );
 
       if (results.length === 0) {
@@ -99,11 +106,15 @@ export class SearchController {
           weaveDetail: classification.weaveDetail,
           fabricType: classification.fabricType,
           colors,
+          categoryId: categoryId?.trim() || null,
+          subcategoryId: subcategoryId?.trim() || null,
         },
         matchScore: results[0]?.finalScore ?? results[0]?.similarity ?? null,
         results: results.map((r) => ({
           fabricId: r.entityId,
           imageUrl: r.imageUrl,
+          categoryId: r.categoryId,
+          subcategoryId: r.subcategoryId,
           score: r.finalScore ?? r.similarity,
           patternPrimary: r.pattern,
           patternDetail: r.pattern_detail,

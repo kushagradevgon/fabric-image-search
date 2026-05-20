@@ -40,12 +40,14 @@ export class ImageSeedController {
    */
   @Post('index-one')
   @HttpCode(HttpStatus.OK)
-  async indexOne(@Body() body: { entityId: string; imageUrl: string }) {
-    const { entityId, imageUrl } = body;
+  async indexOne(
+    @Body() body: { entityId: string; imageUrl: string; categoryId?: string; subcategoryId?: string },
+  ) {
+    const { entityId, imageUrl, categoryId, subcategoryId } = body;
     if (!entityId || !imageUrl) {
       return { ok: false, error: 'Missing entityId or imageUrl' };
     }
-    await this.fabricIndexer.indexFabric(String(entityId), imageUrl);
+    await this.fabricIndexer.indexFabric(String(entityId), imageUrl, { categoryId, subcategoryId });
     const summary = await this.metadataService.getTableSummary(5);
     return { ok: true, entityId: String(entityId), imageUrl, tableAfter: summary };
   }

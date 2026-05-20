@@ -16,6 +16,8 @@ const METADATA_BOOST = 0.1;
 export interface FabricSearchResult {
   entityId: string;
   imageUrl: string;
+  categoryId?: string | null;
+  subcategoryId?: string | null;
   similarity: number;
   finalScore?: number;
   isExactHash?: boolean;
@@ -105,6 +107,8 @@ export class ImageMetadataService {
     imageUrl: string,
     tags: string[],
     rawLabels: any,
+    categoryId?: string | null,
+    subcategoryId?: string | null,
     providerMetadata?: {
       pattern?: string;
       pattern_detail?: string;
@@ -137,6 +141,8 @@ export class ImageMetadataService {
       entityType: "FABRIC" as const,
       entityId: fabricId,
       imageUrl,
+      categoryId: categoryId ?? null,
+      subcategoryId: subcategoryId ?? null,
       tags,
       rawLabels,
       provider_metadata: providerMetadata ?? null,
@@ -189,18 +195,24 @@ export class ImageMetadataService {
     queryLabColors: LabColor[],
     embedding: number[],
     queryHash?: string,
+    categoryId?: string,
+    subcategoryId?: string,
   ): Promise<FabricSearchResult[]> {
     const embeddingSql = pgvector.toSql(embedding);
+    const categoryFilter = categoryId?.trim() || null;
+    const subcategoryFilter = subcategoryId?.trim() || null;
     type Row = {
       entityId: string;
       imageUrl: string;
+      categoryId: string | null;
+      subcategoryId: string | null;
       similarity: string;
       tags: string[] | null;
       provider_metadata: ImageMetadata['provider_metadata'];
       dominant_colors_lab: LabColor[] | null;
     };
     const raw = await this.repo.query<Row[]>(
-      `SELECT "entityId", "imageUrl", tags,
+      `SELECT "entityId", "imageUrl", "categoryId", "subcategoryId", tags,
        (1 - (embedding <=> $3::vector)) AS similarity,
        provider_metadata,
        dominant_colors_lab
@@ -212,9 +224,11 @@ export class ImageMetadataService {
          OR COALESCE(LOWER(TRIM(provider_metadata->>'stripe_width')), 'none')
             = COALESCE(LOWER(TRIM($2)), 'none')
        )
+       AND ($4::text IS NULL OR TRIM("categoryId") = TRIM($4))
+       AND ($5::text IS NULL OR TRIM("subcategoryId") = TRIM($5))
        ORDER BY embedding <=> $3::vector
        LIMIT 50`,
-      [patternPrimary ?? '', stripeWidth ?? 'none', embeddingSql],
+      [patternPrimary ?? '', stripeWidth ?? 'none', embeddingSql, categoryFilter, subcategoryFilter],
     );
 
     const meta = (r: Row) => r.provider_metadata ?? {};
@@ -236,6 +250,8 @@ export class ImageMetadataService {
       return {
         entityId: r.entityId,
         imageUrl: r.imageUrl,
+        categoryId: r.categoryId,
+        subcategoryId: r.subcategoryId,
         similarity,
         hash: m.hash,
         pattern: m.pattern ?? '',
@@ -283,6 +299,8 @@ export class ImageMetadataService {
       JSON.stringify({
         queryPattern: patternPrimary,
         queryStripeWidth: stripeWidth,
+        queryCategoryId: categoryFilter,
+        querySubcategoryId: subcategoryFilter,
         totalRows: results.length,
         afterLabMatch: candidates.length,
         afterThreshold: filtered.length,
@@ -389,7 +407,7 @@ export class ImageMetadataService {
     const sample = await this.repo.find({
       take: limit,
       order: { createdAt: 'DESC' },
-      select: ['id', 'entityId', 'entityType', 'imageUrl', 'tags', 'provider_metadata', 'createdAt'],
+      select: ['id', 'entityId', 'entityType', 'imageUrl', 'categoryId', 'subcategoryId', 'tags', 'provider_metadata', 'createdAt'],
     });
     return {
       table: 'image_metadata',

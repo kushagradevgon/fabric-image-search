@@ -15,6 +15,12 @@ export class ImageMetadata {
   @Column()
   imageUrl: string;
 
+  @Column({ nullable: true })
+  categoryId: string | null;
+
+  @Column({ nullable: true })
+  subcategoryId: string | null;
+
   @Column({ type: 'jsonb' })
   tags: string[];
 

@@ -7,6 +7,8 @@ import { SEED_QUEUE } from './seed-queue.constants';
 export interface SeedJobPayload {
   entityId: string;
   imageUrl: string;
+  categoryId?: string;
+  subcategoryId?: string;
   index: number;
   total: number;
 }
@@ -60,14 +62,14 @@ export class SeedQueueProcessor implements OnModuleInit {
 
   @Process({ concurrency: 5 })
   async handleSeedJob(job: Bull.Job<SeedJobPayload>) {
-    const { entityId, imageUrl, index, total } = job.data;
+    const { entityId, imageUrl, categoryId, subcategoryId, index, total } = job.data;
 
     this.logger.log(
       `[job ${job.id}] [${index}/${total}] Processing entity_id=${entityId} url=${imageUrl} (attempt ${job.attemptsMade + 1}/${job.opts.attempts ?? 1})`,
     );
 
     try {
-      await this.fabricIndexerService.indexFabric(entityId, imageUrl);
+      await this.fabricIndexerService.indexFabric(entityId, imageUrl, { categoryId, subcategoryId });
       this.logger.log(
         `[job ${job.id}] [${index}/${total}] Success entity_id=${entityId} indexed`,
       );

@@ -51,7 +51,11 @@ export class FabricIndexerService {
    * Index a single fabric image. Hard no-image policy: no fallback to text search.
    * Returns skipped result if imageUrl missing, download fails, classification rejected, or embedding null.
    */
-  async indexFabric(entityId: string | number, imageUrl: string): Promise<{
+  async indexFabric(
+    entityId: string | number,
+    imageUrl: string,
+    opts?: { categoryId?: string; subcategoryId?: string },
+  ): Promise<{
     entityId: string;
     skipped: boolean;
     reason?: string;
@@ -101,6 +105,8 @@ export class FabricIndexerService {
         imageUrl,
         [],
         null,
+        opts?.categoryId ?? null,
+        opts?.subcategoryId ?? null,
         { indexStatus: 'rejected_not_fabric' },
         undefined,
       );
@@ -115,6 +121,8 @@ export class FabricIndexerService {
         imageUrl,
         [],
         null,
+        opts?.categoryId ?? null,
+        opts?.subcategoryId ?? null,
         { indexStatus: 'rejected_not_fabric' },
         undefined,
       );
@@ -129,6 +137,8 @@ export class FabricIndexerService {
         imageUrl,
         [],
         null,
+        opts?.categoryId ?? null,
+        opts?.subcategoryId ?? null,
         { indexStatus: 'rejected_not_fabric' },
         undefined,
       );
@@ -205,6 +215,8 @@ export class FabricIndexerService {
       imageUrl,
       tags,
       null,
+      opts?.categoryId ?? null,
+      opts?.subcategoryId ?? null,
       providerMetadata,
       embedding,
       dominantColorsRGB.length > 0 ? dominantColorsRGB : undefined,
@@ -226,11 +238,18 @@ export class FabricIndexerService {
    * Index multiple fabric images with concurrency limit (5). Uses Promise.allSettled.
    */
   async indexFabricBatch(
-    entities: Array<{ entityId: string; imageUrl: string }>,
+    entities: Array<{ entityId: string; imageUrl: string; categoryId?: string; subcategoryId?: string }>,
   ): Promise<Array<{ entityId: string; skipped: boolean; reason?: string; tags?: string[]; providerMetadata?: Record<string, unknown> }>> {
     const limit = pLimit(INDEX_CONCURRENCY);
     const settled = await Promise.allSettled(
-      entities.map((e) => limit(() => this.indexFabric(e.entityId, e.imageUrl))),
+      entities.map((e) =>
+        limit(() =>
+          this.indexFabric(e.entityId, e.imageUrl, {
+            categoryId: e.categoryId,
+            subcategoryId: e.subcategoryId,
+          }),
+        ),
+      ),
     );
     return settled.map((s, i) =>
       s.status === 'fulfilled' ? s.value : { entityId: entities[i]?.entityId ?? 'unknown', skipped: true, reason: 'batch_error' },
