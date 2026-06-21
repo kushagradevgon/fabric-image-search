@@ -15,10 +15,10 @@ export class ImageMetadata {
   @Column()
   imageUrl: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   categoryId: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   subcategoryId: string | null;
 
   @Column({ type: 'jsonb' })
