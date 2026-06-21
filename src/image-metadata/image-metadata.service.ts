@@ -92,6 +92,18 @@ export class ImageMetadataService {
   }
 
   /** Returns existing fabric metadata if already indexed (has embedding) or rejected. Used to skip re-fetch and avoid retry loops. */
+  async updateCategoryIds(
+    entityId: string,
+    categoryId?: string | null,
+    subcategoryId?: string | null,
+  ): Promise<void> {
+    const updates: Partial<Pick<ImageMetadata, 'categoryId' | 'subcategoryId'>> = {};
+    if (categoryId !== undefined) updates.categoryId = categoryId;
+    if (subcategoryId !== undefined) updates.subcategoryId = subcategoryId;
+    if (Object.keys(updates).length === 0) return;
+    await this.repo.update({ entityType: 'FABRIC', entityId }, updates);
+  }
+
   async findFabricByEntityId(entityId: string): Promise<ImageMetadata | null> {
     const row = await this.repo.findOne({
       where: { entityType: "FABRIC", entityId },
@@ -271,7 +283,19 @@ export class ImageMetadataService {
       };
     });
 
-    const candidates = results.filter((r) => isColorMatch(queryLabColors, r.dominant_colors_lab));
+    let categoryScoped = results;
+    if (categoryFilter) {
+      categoryScoped = categoryScoped.filter(
+        (r) => (r.categoryId ?? '').trim() === categoryFilter,
+      );
+    }
+    if (subcategoryFilter) {
+      categoryScoped = categoryScoped.filter(
+        (r) => (r.subcategoryId ?? '').trim() === subcategoryFilter,
+      );
+    }
+
+    const candidates = categoryScoped.filter((r) => isColorMatch(queryLabColors, r.dominant_colors_lab));
 
     const ranked = candidates.map((r) => {
       let score = r.similarity;
@@ -295,17 +319,21 @@ export class ImageMetadataService {
       .filter((r) => r.isExactHash || r.similarity >= STRICT_MIN_SIMILARITY)
       .sort((a, b) => (b.finalScore ?? b.similarity) - (a.finalScore ?? a.similarity));
 
-    this.logger.debug(
-      JSON.stringify({
-        queryPattern: patternPrimary,
-        queryStripeWidth: stripeWidth,
-        queryCategoryId: categoryFilter,
-        querySubcategoryId: subcategoryFilter,
-        totalRows: results.length,
-        afterLabMatch: candidates.length,
-        afterThreshold: filtered.length,
-      }),
-    );
+    const debugPayload = {
+      queryPattern: patternPrimary,
+      queryStripeWidth: stripeWidth,
+      queryCategoryId: categoryFilter,
+      querySubcategoryId: subcategoryFilter,
+      totalRows: results.length,
+      afterCategoryFilter: categoryScoped.length,
+      afterLabMatch: candidates.length,
+      afterThreshold: filtered.length,
+    };
+    if (categoryFilter || subcategoryFilter) {
+      this.logger.log(`strictFilterSearch ${JSON.stringify(debugPayload)}`);
+    } else {
+      this.logger.debug(JSON.stringify(debugPayload));
+    }
 
     return filtered.length > 0 ? filtered.slice(0, 20) : [];
   }

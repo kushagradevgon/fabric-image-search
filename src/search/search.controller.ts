@@ -3,9 +3,12 @@ import {
   Controller,
   Logger,
   Post,
+  Query,
+  Req,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { ImageMetadataService } from '../image-metadata/image-metadata.service';
@@ -36,9 +39,17 @@ export class SearchController {
   @UseInterceptors(FileInterceptor('image'))
   async searchByImage(
     @UploadedFile() file: UploadedImageFile,
-    @Body('categoryId') categoryId?: string,
-    @Body('subcategoryId') subcategoryId?: string,
+    @Body() body: Record<string, unknown>,
+    @Query('categoryId') queryCategoryId?: string,
+    @Query('subcategoryId') querySubcategoryId?: string,
+    @Req() req?: Request,
   ) {
+    const { categoryId, subcategoryId } = this.resolveCategoryFilters(
+      body,
+      req?.query,
+      queryCategoryId,
+      querySubcategoryId,
+    );
     const totalStart = performance.now();
 
     if (!file?.buffer) {
@@ -128,6 +139,39 @@ export class SearchController {
       this.logger.warn(`Search failed: ${err instanceof Error ? err.message : String(err)}`);
       return this.invalidResponse(totalStart);
     }
+  }
+
+  private resolveCategoryFilters(
+    body: Record<string, unknown>,
+    query?: Request['query'],
+    queryCategoryId?: string,
+    querySubcategoryId?: string,
+  ): { categoryId?: string; subcategoryId?: string } {
+    const pick = (...values: unknown[]): string | undefined => {
+      for (const value of values) {
+        if (value == null) continue;
+        const normalized = String(value).trim();
+        if (normalized) return normalized;
+      }
+      return undefined;
+    };
+
+    return {
+      categoryId: pick(
+        body?.categoryId,
+        body?.category_id,
+        queryCategoryId,
+        query?.categoryId,
+        query?.category_id,
+      ),
+      subcategoryId: pick(
+        body?.subcategoryId,
+        body?.subcategory_id,
+        querySubcategoryId,
+        query?.subcategoryId,
+        query?.subcategory_id,
+      ),
+    };
   }
 
   private invalidResponse(totalStart: number) {

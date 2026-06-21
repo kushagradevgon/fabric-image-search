@@ -73,6 +73,9 @@ export class FabricIndexerService {
 
     const existing = await this.imageMetadataService.findFabricByEntityId(id);
     if (existing) {
+      if (opts?.categoryId !== undefined || opts?.subcategoryId !== undefined) {
+        await this.imageMetadataService.updateCategoryIds(id, opts?.categoryId, opts?.subcategoryId);
+      }
       const status = (existing.provider_metadata as { indexStatus?: string } | null)?.indexStatus;
       this.logger.log(`  skip: already in DB entityId=${id}${status === 'rejected_not_fabric' ? ' (rejected)' : ''}`);
       return {
