@@ -80,7 +80,9 @@ export class FabricIndexerService {
       return { entityId: id, skipped: true, reason: 'no_image' };
     }
 
-    this.logger.log(`indexFabric start entityId=${id} imageUrl=${imageUrl}`);
+    this.logger.log(
+      `indexFabric start entityId=${id} categoryId=${opts?.categoryId ?? 'null'} subcategoryId=${opts?.subcategoryId ?? 'null'} imageUrl=${imageUrl}`,
+    );
 
     const existing = await this.imageMetadataService.findFabricByEntityId(id);
     if (existing) {
@@ -236,7 +238,7 @@ export class FabricIndexerService {
     );
 
     this.logger.log(
-      `indexFabric done entityId=${id} patternPrimary=${classification.patternPrimary} weavePrimary=${classification.weavePrimary}`,
+      `indexFabric done entityId=${id} categoryId=${opts?.categoryId ?? 'null'} subcategoryId=${opts?.subcategoryId ?? 'null'} patternPrimary=${classification.patternPrimary} weavePrimary=${classification.weavePrimary}`,
     );
     return {
       entityId: id,
