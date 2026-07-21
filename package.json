@@ -20,8 +20,6 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
-    "color-convert": "^2.0.1",
-    "delta-e": "^0.0.8",
     "@bull-board/api": "^6.19.0",
     "@bull-board/express": "^6.19.0",
     "@bull-board/nestjs": "^6.19.0",
@@ -35,6 +33,8 @@
     "@nestjs/typeorm": "^11.0.0",
     "axios": "^1.13.5",
     "bull": "^4.16.5",
+    "color-convert": "^2.0.1",
+    "delta-e": "^0.0.8",
     "ioredis": "^5.4.1",
     "pg": "^8.18.0",
     "pgvector": "^0.2.0",

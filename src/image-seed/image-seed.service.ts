@@ -9,6 +9,7 @@ import type { SeedJobPayload } from './seed-queue.processor';
 @Injectable()
 export class ImageSeedService {
   private readonly logger = new Logger(ImageSeedService.name);
+  private readonly baseUrl = process.env.STRAPI_BASE_URL?.replace(/\/$/, '') ?? '';
 
   constructor(
     private readonly dataSource: DataSource,
@@ -54,7 +55,8 @@ export class ImageSeedService {
 
       WHERE frm.field = 'image'
         AND frm.related_type IN ('api::fabric.fabric', 'api::knit.knit')
-      ORDER BY random();
+      ORDER BY random()
+      LIMIT 1;
     `;
 
     this.logger.log('Fetching fabric image records from DB...');
@@ -127,12 +129,40 @@ export class ImageSeedService {
     return this.getQueueStats();
   }
 
-  private getBestImage(fileUrl: string, formats: any) {
-    if (formats?.large?.url) return formats.large.url;
-    if (formats?.medium?.url) return formats.medium.url;
-    if (formats?.small?.url) return formats.small.url;
-    if (formats?.thumbnail?.url) return formats.thumbnail.url;
-    return fileUrl;
+  private parseFormats(formats: unknown): Record<string, { url?: string }> | null {
+    if (!formats) return null;
+    if (typeof formats === 'string') {
+      try {
+        return JSON.parse(formats) as Record<string, { url?: string }>;
+      } catch {
+        return null;
+      }
+    }
+    if (typeof formats === 'object') return formats as Record<string, { url?: string }>;
+    return null;
+  }
+
+  private resolveImageUrl(path: string): string {
+    if (!path?.trim()) return path;
+    try {
+      const u = new URL(path);
+      if (u.protocol === 'http:' || u.protocol === 'https:') return path;
+    } catch {
+      // relative path — prepend STRAPI_BASE_URL
+    }
+    if (!this.baseUrl) return path;
+    return `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+  }
+
+  private getBestImage(fileUrl: string, formats: unknown) {
+    const parsed = this.parseFormats(formats);
+    const raw =
+      parsed?.large?.url ??
+      parsed?.medium?.url ??
+      parsed?.small?.url ??
+      parsed?.thumbnail?.url ??
+      fileUrl;
+    return this.resolveImageUrl(raw);
   }
 
   private isValidUrl(value: string | null | undefined): value is string {

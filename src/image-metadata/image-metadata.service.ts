@@ -104,13 +104,13 @@ export class ImageMetadataService {
     await this.repo.update({ entityType: 'FABRIC', entityId }, updates);
   }
 
+  /** Returns existing fabric metadata only when fully indexed (has embedding). Rejected rows are retried. */
   async findFabricByEntityId(entityId: string): Promise<ImageMetadata | null> {
     const row = await this.repo.findOne({
       where: { entityType: "FABRIC", entityId },
     });
     if (!row) return null;
     if (row.embedding != null) return row;
-    if ((row.provider_metadata as { indexStatus?: string } | null)?.indexStatus === 'rejected_not_fabric') return row;
     return null;
   }
 
@@ -138,6 +138,8 @@ export class ImageMetadataService {
       confidence?: number;
       hash?: string;
       indexStatus?: 'indexed' | 'rejected_not_fabric';
+      indexRejectReason?: string;
+      classificationError?: string;
     } | null,
     embedding?: number[],
     dominantColorsRgb?: { r: number; g: number; b: number }[] | null,

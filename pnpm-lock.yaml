@@ -47,6 +47,12 @@ importers:
       bull:
         specifier: ^4.16.5
         version: 4.16.5
+      color-convert:
+        specifier: ^2.0.1
+        version: 2.0.1
+      delta-e:
+        specifier: ^0.0.8
+        version: 0.0.8
       ioredis:
         specifier: ^5.4.1
         version: 5.9.3
@@ -1752,6 +1758,9 @@ packages:
   delayed-stream@1.0.0:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
     engines: {node: '>=0.4.0'}
+
+  delta-e@0.0.8:
+    resolution: {integrity: sha512-xIggbz7AoZLjwyV+BatfsKhWB1ejeh6vabM4KTJ2e7/d+TS0f7s87aUfkJ7B+MfniM6DD5VOWWlqcKXksp5mIg==}
 
   denque@2.1.0:
     resolution: {integrity: sha512-HVQE3AAb/pxF8fQAoiqpvg9i3evqug3hoiwakOyZAwJm+6vZehbkYXZ0l4JxS+I3QxM97v5aaRNhj8v5oBhekw==}
@@ -5318,6 +5327,8 @@ snapshots:
       gopd: 1.2.0
 
   delayed-stream@1.0.0: {}
+
+  delta-e@0.0.8: {}
 
   denque@2.1.0: {}
 

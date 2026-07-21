@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import axios from 'axios';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import crypto from 'crypto';
 import {
   PATTERN_PRIMARY_ENUM,
@@ -15,7 +15,7 @@ import {
 } from '../constants/fabric-visual.enums';
 import { ImagePreprocessingService } from './image-preprocessing.service';
 
-const GEMINI_VISION_MODEL = 'gemini-2.5-flash';
+const DEFAULT_GEMINI_VISION_MODEL = 'gemini-3.6-flash';
 
 export const FABRIC_COVERAGE_SKIP = 0.15;
 export const FABRIC_COVERAGE_LOW = 0.4;
@@ -77,40 +77,59 @@ Return JSON only (no colors):
 }`;
 }
 
+function parseFabricCoverage(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0.5;
+  const normalized = n > 1 ? n / 100 : n;
+  return Math.max(0, Math.min(1, normalized));
+}
+
+function parseFabricVisible(raw: unknown): boolean {
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return true;
+}
+
 @Injectable()
 export class GeminiVisionService {
   private readonly logger = new Logger(GeminiVisionService.name);
   private readonly apiKey = process.env.GEMINI_API_KEY;
-  private get baseUrl(): string {
-    return `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent`;
-  }
+  private readonly modelName =
+    process.env.GEMINI_VISION_MODEL?.trim() || DEFAULT_GEMINI_VISION_MODEL;
 
   constructor(private readonly preprocessing: ImagePreprocessingService) {}
+
+  private getModel() {
+    if (!this.apiKey?.trim()) throw new Error('GEMINI_API_KEY is not set');
+    const client = new GoogleGenerativeAI(this.apiKey);
+    return client.getGenerativeModel({
+      model: this.modelName,
+      systemInstruction: SYSTEM,
+      generationConfig: { responseMimeType: 'application/json' },
+    });
+  }
 
   generateHash(buffer: Buffer): string {
     return crypto.createHash('sha256').update(buffer).digest('hex');
   }
 
   private async callGemini(imageBuffer: Buffer, userPrompt: string): Promise<string> {
-    if (!this.apiKey?.trim()) throw new Error('GEMINI_API_KEY is not set');
     const base64 = imageBuffer.toString('base64');
-    const response = await axios.post(
-      `${this.baseUrl}?key=${this.apiKey}`,
-      {
-        contents: [{ role: 'user', parts: [{ text: userPrompt }, { inline_data: { mime_type: 'image/jpeg', data: base64 } }] }],
-        systemInstruction: { parts: [{ text: SYSTEM }] },
-        generationConfig: { responseMimeType: 'application/json' },
-      },
-      { timeout: 30_000, validateStatus: (s) => s === 200 },
-    );
-    if (response.status !== 200) {
-      const msg = response.data?.error?.message ?? response.data?.message ?? JSON.stringify(response.data ?? response.statusText);
-      this.logger.warn(`Gemini API error: ${msg}`);
+    try {
+      const result = await this.getModel().generateContent([
+        userPrompt,
+        { inlineData: { mimeType: 'image/jpeg', data: base64 } },
+      ]);
+      const text = result.response.text()?.trim() ?? '';
+      if (!text) {
+        const finishReason = result.response.candidates?.[0]?.finishReason ?? 'unknown';
+        throw new Error(`Empty response from Gemini (finishReason=${finishReason})`);
+      }
+      return text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Gemini API error (model=${this.modelName}): ${msg}`);
       throw new Error(`Gemini API error: ${msg}`);
     }
-    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
-    if (!text) throw new Error('Empty response from Gemini');
-    return text;
   }
 
   private parseJson<T>(text: string, label: string): T {
@@ -131,12 +150,16 @@ export class GeminiVisionService {
    */
   async classifyFabric(buffer: Buffer): Promise<FabricClassification> {
     const { full } = await this.preprocessing.prepare(buffer);
-    const raw = await this.callGemini(full, buildClassificationPrompt());
-    const parsed = this.parseJson<GeminiClassificationResponse>(raw, 'classification');
+    const responseText = await this.callGemini(full, buildClassificationPrompt());
+    const parsed = this.parseJson<GeminiClassificationResponse>(responseText, 'classification');
 
-    const isFabricVisible = Boolean(parsed.isFabricVisible !== false);
-    const fabricCoverage = Math.max(0, Math.min(1, Number(parsed.fabricCoverage) ?? 0));
-    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence) ?? 0));
+    const fields = parsed as GeminiClassificationResponse & {
+      is_fabric_visible?: boolean;
+      fabric_coverage?: number;
+    };
+    const isFabricVisible = parseFabricVisible(fields.isFabricVisible ?? fields.is_fabric_visible);
+    const fabricCoverage = parseFabricCoverage(fields.fabricCoverage ?? fields.fabric_coverage);
+    const confidence = Math.max(0, Math.min(1, Number.isFinite(Number(fields.confidence)) ? Number(fields.confidence) : 0));
 
     const patternPrimaryRaw = String(parsed.patternPrimary ?? 'solid').toLowerCase().trim();
     const patternPrimary = isPatternPrimary(patternPrimaryRaw) ? patternPrimaryRaw : mapToPatternPrimary(patternPrimaryRaw);
@@ -152,8 +175,8 @@ export class GeminiVisionService {
     const fabricTypeRaw = String(parsed.fabricType ?? 'blend').toLowerCase().trim();
     const fabricType = isFabricType(fabricTypeRaw) ? fabricTypeRaw : 'blend';
 
-    this.logger.debug(
-      `Classification: patternPrimary=${patternPrimary} patternDetail=${patternDetail} weavePrimary=${weavePrimary} isFabricVisible=${isFabricVisible} fabricCoverage=${fabricCoverage} confidence=${confidence}`,
+    this.logger.log(
+      `Classification (${this.modelName}): patternPrimary=${patternPrimary} isFabricVisible=${isFabricVisible} fabricCoverage=${fabricCoverage} confidence=${confidence}`,
     );
 
     return {

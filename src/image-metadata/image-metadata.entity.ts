@@ -45,6 +45,8 @@ export class ImageMetadata {
     confidence?: number;
     hash?: string;
     indexStatus?: 'indexed' | 'rejected_not_fabric';
+    indexRejectReason?: string;
+    classificationError?: string;
   } | null;
 
   @Column('vector', { length: 768, nullable: true })

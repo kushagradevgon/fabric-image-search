@@ -8,6 +8,17 @@ import { rgbToLab } from '../utils/color-lab.util';
 
 const INDEX_CONCURRENCY = 5;
 
+function rejectedMetadata(
+  reason: string,
+  extra?: { classificationError?: string },
+): { indexStatus: 'rejected_not_fabric'; indexRejectReason: string; classificationError?: string } {
+  return {
+    indexStatus: 'rejected_not_fabric',
+    indexRejectReason: reason,
+    ...(extra?.classificationError ? { classificationError: extra.classificationError } : {}),
+  };
+}
+
 /** Run at most `concurrency` promises at a time (p-limit style). */
 function pLimit(concurrency: number) {
   let active = 0;
@@ -76,12 +87,11 @@ export class FabricIndexerService {
       if (opts?.categoryId !== undefined || opts?.subcategoryId !== undefined) {
         await this.imageMetadataService.updateCategoryIds(id, opts?.categoryId, opts?.subcategoryId);
       }
-      const status = (existing.provider_metadata as { indexStatus?: string } | null)?.indexStatus;
-      this.logger.log(`  skip: already in DB entityId=${id}${status === 'rejected_not_fabric' ? ' (rejected)' : ''}`);
+      this.logger.log(`  skip: already indexed entityId=${id}`);
       return {
         entityId: id,
         skipped: true,
-        reason: status === 'rejected_not_fabric' ? 'rejected_not_fabric' : 'already_indexed',
+        reason: 'already_indexed',
       };
     }
 
@@ -99,9 +109,8 @@ export class FabricIndexerService {
     try {
       classification = await this.geminiVisionService.classifyFabric(imageBuffer);
     } catch (err) {
-      this.logger.warn(
-        `Classification failed (rejecting): ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Classification failed (rejecting): ${errMsg}`);
       await this.imageMetadataService.ensureVectorExtension();
       await this.imageMetadataService.saveFabricMetadata(
         id,
@@ -110,10 +119,10 @@ export class FabricIndexerService {
         null,
         opts?.categoryId ?? null,
         opts?.subcategoryId ?? null,
-        { indexStatus: 'rejected_not_fabric' },
+        rejectedMetadata('classification_error', { classificationError: errMsg }),
         undefined,
       );
-      return { entityId: id, skipped: true, reason: 'rejected_not_fabric' };
+      return { entityId: id, skipped: true, reason: 'classification_error' };
     }
 
     if (!classification.isFabricVisible) {
@@ -126,7 +135,7 @@ export class FabricIndexerService {
         null,
         opts?.categoryId ?? null,
         opts?.subcategoryId ?? null,
-        { indexStatus: 'rejected_not_fabric' },
+        rejectedMetadata('fabric_not_visible'),
         undefined,
       );
       return { entityId: id, skipped: true, reason: 'fabric_not_visible' };
@@ -142,7 +151,7 @@ export class FabricIndexerService {
         null,
         opts?.categoryId ?? null,
         opts?.subcategoryId ?? null,
-        { indexStatus: 'rejected_not_fabric' },
+        rejectedMetadata('fabric_coverage_too_low'),
         undefined,
       );
       return { entityId: id, skipped: true, reason: 'fabric_coverage_too_low' };
