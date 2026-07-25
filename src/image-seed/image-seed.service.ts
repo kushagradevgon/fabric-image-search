@@ -64,6 +64,7 @@ export class ImageSeedService {
 
       WHERE frm.field = 'image'
         AND frm.related_type IN ('api::fabric.fabric', 'api::knit.knit')
+        AND sc.name ILIKE '%yarn-dyed%'
         AND f.url IS NOT NULL
         AND NOT EXISTS (
           SELECT 1
@@ -71,7 +72,7 @@ export class ImageSeedService {
           WHERE im."entityType" = 'FABRIC'
             AND im."entityId" = frm.related_id::text
         )
-      ORDER BY frm.related_type, frm.related_id ASC
+      ORDER BY frm.related_type, frm.related_id DESC
       LIMIT $1;
     `;
 
