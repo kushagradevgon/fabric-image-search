@@ -3,7 +3,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Injectable, Logger } from '@nestjs/common';
 import * as Bull from 'bull';
 import { DataSource } from 'typeorm';
-import { SEED_QUEUE } from './seed-queue.constants';
+import { SEED_BATCH_SIZE, SEED_BATCH_SIZE_MAX, SEED_QUEUE } from './seed-queue.constants';
 import type { SeedJobPayload } from './seed-queue.processor';
 
 @Injectable()
@@ -16,9 +16,18 @@ export class ImageSeedService {
     @InjectQueue(SEED_QUEUE) private readonly seedQueue: Bull.Queue,
   ) {}
 
-  async seed() {
+  /**
+   * Enqueue up to `batchSize` fabric/knit images that are not already in image_metadata.
+   * One manual call = one batch; does not auto-start the next batch.
+   */
+  async seed(batchSize = SEED_BATCH_SIZE) {
+    const limit = Math.min(
+      Math.max(1, Number.isFinite(batchSize) ? Math.floor(batchSize) : SEED_BATCH_SIZE),
+      SEED_BATCH_SIZE_MAX,
+    );
+
     const query = `
-      SELECT
+      SELECT DISTINCT ON (frm.related_type, frm.related_id)
           frm.related_type,
           f.url AS file_url,
           f.formats,
@@ -55,18 +64,25 @@ export class ImageSeedService {
 
       WHERE frm.field = 'image'
         AND frm.related_type IN ('api::fabric.fabric', 'api::knit.knit')
-      ORDER BY random()
-      LIMIT 1;
+        AND f.url IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM image_metadata im
+          WHERE im."entityType" = 'FABRIC'
+            AND im."entityId" = frm.related_id::text
+        )
+      ORDER BY frm.related_type, frm.related_id ASC
+      LIMIT $1;
     `;
 
-    this.logger.log('Fetching fabric image records from DB...');
-    const records = await this.dataSource.query(query);
+    this.logger.log(`Fetching up to ${limit} unindexed fabric image records from DB...`);
+    const records = await this.dataSource.query(query, [limit]);
     this.logger.log(`Found ${records.length} record(s)`);
 
     let queued = 0;
-    let skipped = 0;
+    let skippedInvalid = 0;
+    let skippedDuplicateJob = 0;
     const total = records.length;
-    const runId = Date.now();
 
     for (let i = 0; i < records.length; i++) {
       const record = records[i];
@@ -76,7 +92,7 @@ export class ImageSeedService {
         this.logger.log(
           `[${i + 1}/${total}] skipped entity_id=${record.entity_id} (invalid URL: ${String(candidate).slice(0, 60)}...)`,
         );
-        skipped++;
+        skippedInvalid++;
         continue;
       }
 
@@ -91,13 +107,40 @@ export class ImageSeedService {
         index: i + 1,
         total,
       };
-      await this.seedQueue.add(payload, { jobId: `fabric-${entityId}-${i}-${runId}` });
-      this.logger.log(`[${i + 1}/${total}] queued entity_id=${record.entity_id} url=${candidate}`);
-      queued++;
+
+      // Stable jobId: re-running seed won't enqueue the same entity twice while job exists.
+      const jobId = `fabric-${entityId}`;
+      try {
+        await this.seedQueue.add(payload, {
+          jobId,
+          removeOnComplete: true,
+          removeOnFail: false,
+        });
+        this.logger.log(`[${i + 1}/${total}] queued entity_id=${entityId} url=${candidate}`);
+        queued++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/already exists|JobId/i.test(msg)) {
+          skippedDuplicateJob++;
+          this.logger.log(`[${i + 1}/${total}] skipped entity_id=${entityId} (already in queue)`);
+        } else {
+          throw err;
+        }
+      }
     }
 
-    this.logger.log(`Seed enqueue complete: queued=${queued} skipped=${skipped} total=${total}`);
-    return { total, queued, skipped };
+    this.logger.log(
+      `Seed enqueue complete: queued=${queued} skippedInvalid=${skippedInvalid} ` +
+        `skippedDuplicateJob=${skippedDuplicateJob} fetched=${total} batchSize=${limit}`,
+    );
+    return {
+      batchSize: limit,
+      fetched: total,
+      queued,
+      skippedInvalid,
+      skippedDuplicateJob,
+      skipped: skippedInvalid + skippedDuplicateJob,
+    };
   }
 
   async getQueueStats() {

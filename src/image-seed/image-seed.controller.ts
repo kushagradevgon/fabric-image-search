@@ -14,17 +14,23 @@ export class ImageSeedController {
     private readonly fabricIndexer: FabricIndexerService,
   ) {}
 
+  /**
+   * Enqueue one manual batch (default 500) of unindexed images.
+   * Body optional: { "batchSize": 500 }
+   * Does not auto-start the next batch — call again after this one finishes.
+   */
   @Post()
   @HttpCode(HttpStatus.OK)
-  async seed() {
-    const result = await this.seedService.seed();
-    this.logger.log(`Seed finished: ${JSON.stringify(result)}`);
+  async seed(@Body() body?: { batchSize?: number }) {
+    const result = await this.seedService.seed(body?.batchSize);
+    this.logger.log(`Seed enqueue finished: ${JSON.stringify(result)}`);
     const queueStats = await this.seedService.getQueueStats();
     return {
       status: 'ok',
       ...result,
       queue: queueStats,
-      hint: 'Jobs process in background. Check GET /image-seed/queue for progress, GET /queues for Bull Board.',
+      hint:
+        'One batch only. Watch GET /image-seed/queue until waiting+active are 0, then POST again for the next 500. Bull Board: GET /queues.',
     };
   }
 

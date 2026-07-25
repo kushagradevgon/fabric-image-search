@@ -19,6 +19,13 @@ function rejectedMetadata(
   };
 }
 
+/** Transient Gemini / API failures — let Bull retry instead of writing rejected_not_fabric. */
+function isTransientApiError(message: string): boolean {
+  return /429|503|500|502|504|RESOURCE_EXHAUSTED|UNAVAILABLE|quota|rate.?limit|billing|pricing|exceeded|Too Many Requests|ECONNRESET|ETIMEDOUT|socket hang up|deadline/i.test(
+    message,
+  );
+}
+
 /** Run at most `concurrency` promises at a time (p-limit style). */
 function pLimit(concurrency: number) {
   let active = 0;
@@ -112,6 +119,10 @@ export class FabricIndexerService {
       classification = await this.geminiVisionService.classifyFabric(imageBuffer);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (isTransientApiError(errMsg)) {
+        this.logger.warn(`Classification transient failure (will retry): ${errMsg}`);
+        throw err instanceof Error ? err : new Error(errMsg);
+      }
       this.logger.warn(`Classification failed (rejecting): ${errMsg}`);
       await this.imageMetadataService.ensureVectorExtension();
       await this.imageMetadataService.saveFabricMetadata(
@@ -181,7 +192,12 @@ export class FabricIndexerService {
     try {
       embedding = await this.geminiEmbeddingService.embed(text);
     } catch (err) {
-      this.logger.warn(`indexFabric skip entityId=${id}: embedding failed - ${err instanceof Error ? err.message : String(err)}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (isTransientApiError(errMsg)) {
+        this.logger.warn(`Embedding transient failure (will retry) entityId=${id}: ${errMsg}`);
+        throw err instanceof Error ? err : new Error(errMsg);
+      }
+      this.logger.warn(`indexFabric skip entityId=${id}: embedding failed - ${errMsg}`);
       return { entityId: id, skipped: true, reason: 'embedding_failed' };
     }
     if (!embedding?.length) {

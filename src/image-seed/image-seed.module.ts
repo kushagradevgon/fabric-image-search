@@ -11,6 +11,8 @@ import {
   SEED_QUEUE,
   SEED_JOB_ATTEMPTS,
   SEED_JOB_BACKOFF_MS,
+  SEED_RATE_MAX,
+  SEED_RATE_DURATION_MS,
 } from './seed-queue.constants';
 
 @Module({
@@ -19,10 +21,15 @@ import {
     ImageMetadataModule,
     BullModule.registerQueue({
       name: SEED_QUEUE,
+      limiter: {
+        max: SEED_RATE_MAX,
+        duration: SEED_RATE_DURATION_MS,
+      },
       defaultJobOptions: {
         attempts: SEED_JOB_ATTEMPTS,
         backoff: { type: 'exponential', delay: SEED_JOB_BACKOFF_MS },
-        removeOnComplete: 500,
+        removeOnComplete: true,
+        removeOnFail: false,
       },
     }),
     BullBoardModule.forFeature({

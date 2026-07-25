@@ -2,7 +2,7 @@ import { InjectQueue, Processor, Process } from '@nestjs/bull';
 import { Logger, OnModuleInit } from '@nestjs/common';
 import * as Bull from 'bull';
 import { FabricIndexerService } from '../fabric-indexer/fabric-indexer.service';
-import { SEED_QUEUE } from './seed-queue.constants';
+import { SEED_CONCURRENCY, SEED_QUEUE } from './seed-queue.constants';
 
 export interface SeedJobPayload {
   entityId: string;
@@ -60,7 +60,7 @@ export class SeedQueueProcessor implements OnModuleInit {
     });
   }
 
-  @Process({ concurrency: 5 })
+  @Process({ concurrency: SEED_CONCURRENCY })
   async handleSeedJob(job: Bull.Job<SeedJobPayload>) {
     const { entityId, imageUrl, categoryId, subcategoryId, index, total } = job.data;
 
