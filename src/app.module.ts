@@ -41,6 +41,13 @@ import { ImageSeedModule } from './image-seed/image-seed.module';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       autoLoadEntities: true,
+      // RDS rejects unencrypted connections (pg_hba.conf requires SSL). AWS's
+      // RDS certs aren't in Node's default CA store, so rejectUnauthorized is
+      // off; set DB_SSL=false to disable entirely (e.g. local Postgres).
+      ssl:
+        process.env.DB_SSL === 'false'
+          ? false
+          : { rejectUnauthorized: false },
       // This database is shared with Strapi. Our tables live in the dedicated
       // `image_search` schema (see migrations/000_create_image_search_schema.sql)
       // so Strapi's own schema sync never sees/drops them. search_path makes
