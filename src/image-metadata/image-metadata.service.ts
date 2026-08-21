@@ -84,11 +84,11 @@ export class ImageMetadataService {
     await this.ensureVectorExtension();
     await this.repo.query(`
       CREATE INDEX IF NOT EXISTS image_metadata_embedding_hnsw_idx
-      ON image_metadata
+      ON image_search.image_metadata
       USING hnsw (embedding vector_cosine_ops)
       WITH (m = 16, ef_construction = 64)
     `);
-    await this.repo.query('ANALYZE image_metadata');
+    await this.repo.query('ANALYZE image_search.image_metadata');
   }
 
   /** Returns existing fabric metadata if already indexed (has embedding) or rejected. Used to skip re-fetch and avoid retry loops. */
@@ -188,7 +188,7 @@ export class ImageMetadataService {
     const raw = await this.repo.query<Array<{ id: string; similarity: string }>>(
       `SELECT id,
               (1 - (embedding <=> $1::vector)) AS similarity
-       FROM image_metadata
+       FROM image_search.image_metadata
        WHERE embedding IS NOT NULL
        ORDER BY embedding <=> $1::vector
        LIMIT 5`,
@@ -230,7 +230,7 @@ export class ImageMetadataService {
        (1 - (embedding <=> $3::vector)) AS similarity,
        provider_metadata,
        dominant_colors_lab
-       FROM image_metadata
+       FROM image_search.image_metadata
        WHERE embedding IS NOT NULL
        AND LOWER(TRIM(COALESCE(provider_metadata->>'pattern', ''))) = LOWER(TRIM($1))
        AND (
@@ -357,7 +357,7 @@ export class ImageMetadataService {
       `SELECT "entityId", "imageUrl", tags,
        embedding <=> $1::vector AS distance,
        provider_metadata
-       FROM image_metadata
+       FROM image_search.image_metadata
        WHERE embedding IS NOT NULL
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
@@ -440,7 +440,7 @@ export class ImageMetadataService {
       select: ['id', 'entityId', 'entityType', 'imageUrl', 'categoryId', 'subcategoryId', 'tags', 'provider_metadata', 'createdAt'],
     });
     return {
-      table: 'image_metadata',
+      table: 'image_search.image_metadata',
       count,
       sample,
       database: opts.database ?? null,

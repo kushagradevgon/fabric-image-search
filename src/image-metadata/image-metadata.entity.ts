@@ -1,7 +1,7 @@
 // image-metadata/image-metadata.entity.ts
 import { Entity, Column, PrimaryGeneratedColumn, Index } from 'typeorm';
 
-@Entity('image_metadata')
+@Entity({ name: 'image_metadata', schema: 'image_search' })
 export class ImageMetadata {
   @PrimaryGeneratedColumn('uuid')
   id: string;

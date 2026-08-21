@@ -1,6 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn, Index } from 'typeorm';
 
-@Entity('fabric')
+@Entity({ name: 'fabric', schema: 'image_search' })
 export class Fabric {
   @PrimaryGeneratedColumn('uuid')
   id: string;

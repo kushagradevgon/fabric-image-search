@@ -68,7 +68,7 @@ export class ImageSeedService {
         AND f.url IS NOT NULL
         AND NOT EXISTS (
           SELECT 1
-          FROM image_metadata im
+          FROM image_search.image_metadata im
           WHERE im."entityType" = 'FABRIC'
             AND im."entityId" = frm.related_id::text
         )

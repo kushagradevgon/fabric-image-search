@@ -61,7 +61,7 @@ export class FabricService {
     const raw = await this.repo.query<Array<Fabric & { similarity: string }>>(
       `SELECT *,
        1 - (embedding <=> $1::vector) AS similarity
-       FROM fabric
+       FROM image_search.fabric
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
       [embeddingSql, SEARCH_LIMIT],

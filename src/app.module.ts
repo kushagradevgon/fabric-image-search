@@ -41,7 +41,20 @@ import { ImageSeedModule } from './image-seed/image-seed.module';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       autoLoadEntities: true,
-      synchronize: true, // ❗ only for dev
+      // This database is shared with Strapi. Our tables live in the dedicated
+      // `image_search` schema (see migrations/000_create_image_search_schema.sql)
+      // so Strapi's own schema sync never sees/drops them. search_path makes
+      // unqualified table names in raw SQL (e.g. image_metadata, fabric) resolve
+      // to our schema first, falling back to `public` for Strapi's own tables
+      // (fabrics, files, categories, ...) that we still read via raw joins.
+      schema: 'image_search',
+      extra: {
+        options: '-c search_path=image_search,public',
+      },
+      // Safe to always run: scoped to entities registered in this app only
+      // (image_metadata, fabric in the image_search schema), so it can never
+      // create/alter/drop anything in Strapi's `public` schema/tables.
+      synchronize: true,
     }),
 
     VisionModule,
